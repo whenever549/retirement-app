@@ -1,25 +1,38 @@
-
 import streamlit as st
+import pandas as pd
+import matplotlib.pyplot as plt
 
 def calculate_retirement_fv(start_monthly, inflation_rate=0.07, return_rate=0.07, years=28):
     fv = 0
+    yearly_data = []
     for year in range(years):
         monthly_saving = start_monthly * ((1 + inflation_rate) ** year)
+        yearly_saving = monthly_saving * 12
+        future_value = 0
         for m in range(12):
             months_left = (years - year - 1) * 12 + (12 - m)
-            fv += monthly_saving * ((1 + return_rate / 12) ** months_left)
-    return fv
+            future_value += monthly_saving * ((1 + return_rate / 12) ** months_left)
+        fv += future_value
+        yearly_data.append({
+            "연도": year + 1,
+            "월 저축액": round(monthly_saving),
+            "연 저축액": round(yearly_saving),
+            "누적 미래가치": round(fv)
+        })
+    return fv, pd.DataFrame(yearly_data)
 
 def find_optimal_start_saving(target_fv, inflation_rate=0.07, return_rate=0.07, years=28):
     best_guess = 0
     min_diff = float('inf')
+    best_df = pd.DataFrame()
     for guess in range(850_000, 1_200_000, 1000):
-        fv = calculate_retirement_fv(guess, inflation_rate, return_rate, years)
+        fv, df = calculate_retirement_fv(guess, inflation_rate, return_rate, years)
         diff = abs(fv - target_fv)
         if diff < min_diff:
             min_diff = diff
             best_guess = guess
-    return best_guess, calculate_retirement_fv(best_guess)
+            best_df = df
+    return best_guess, fv, best_df
 
 st.set_page_config(page_title="은퇴자금 계산기", layout="centered")
 st.title("은퇴자금 계산기 (시작 저축액 자동 보정)")
@@ -46,9 +59,68 @@ monthly_shortfall = monthly_expense - monthly_income
 target_needed = monthly_shortfall * 12 * years_after_retirement
 present_gap = target_needed - current_asset
 
-# 물가 적용 목표 금액
 target_fv = present_gap * ((1 + inflation / 100) ** years_to_retire)
-start_saving, reached_fv = find_optimal_start_saving(target_fv, inflation / 100, investment_return / 100, years_to_retire)
+start_saving, reached_fv, df_savings = find_optimal_start_saving(target_fv, inflation / 100, investment_return / 100, years_to_retire)
 
-st.success(f"월 {int(start_saving):,}원 저축하면 2053년에 약 {int(reached_fv):,}원을 모을 수 있어요.")
+st.success(f"월 {int(start_saving):,}원 저축하면 {retire_age}세에 약 {int(reached_fv):,}원을 모을 수 있어요.")
 st.caption("* 매년 물가상승률만큼 저축액도 자동으로 증가한다고 가정합니다.")
+
+st.markdown("### 상세 계산 요약")
+st.markdown(f"- 은퇴까지 남은 기간: **{years_to_retire}년**")
+st.markdown(f"- 은퇴 후 생활 기간: **{years_after_retirement}년**")
+st.markdown(f"- 은퇴 후 매월 부족 금액: **{monthly_shortfall:,.0f}원**")
+st.markdown(f"- 은퇴 후 총 필요 자금 (순현가치): **{target_needed:,.0f}원**")
+st.markdown(f"- 현재 자산: **{current_asset:,.0f}원**")
+st.markdown(f"- 부족 자금 (순현가치): **{present_gap:,.0f}원**")
+st.markdown(f"- 부족 자금 (명목가치, {retire_age}년 기준): **{target_fv:,.0f}원**")
+
+st.markdown("---")
+st.subheader("3. 연도별 저축 계획 시각화")
+
+fig, ax = plt.subplots()
+ax.plot(df_savings["연도"], df_savings["누적 미래가치"], marker='o', label="누적 미래가치")
+ax.bar(df_savings["연도"], df_savings["연 저축액"], alpha=0.5, label="연 저축액")
+ax.set_xlabel("연도")
+ax.set_ylabel("금액 (원)")
+ax.set_title("연도별 저축액 및 누적 자산")
+ax.legend()
+plt.xticks(rotation=45)
+
+st.pyplot(fig)
+
+st.markdown("---")
+st.subheader("4. 저축 계획표 다운로드")
+st.dataframe(df_savings.set_index("연도"))
+
+csv = df_savings.to_csv(index=False).encode('utf-8-sig')
+st.download_button(
+    label="CSV 파일로 다운로드",
+    data=csv,
+    file_name="retirement_savings_plan.csv",
+    mime="text/csv"
+)
+
+from io import BytesIO
+import base64
+from fpdf import FPDF
+
+class PDF(FPDF):
+    def header(self):
+        self.set_font('Arial', 'B', 12)
+        self.cell(0, 10, '은퇴자금 저축 계획표', ln=True, align='C')
+
+pdf = PDF()
+pdf.add_page()
+pdf.set_font("Arial", size=10)
+for index, row in df_savings.iterrows():
+    pdf.cell(0, 10, f"연도 {row['연도']}: 월 {row['월 저축액']:,}원, 연 {row['연 저축액']:,}원, 누적 자산 {row['누적 미래가치']:,}원", ln=True)
+
+pdf_output = BytesIO()
+pdf.output(pdf_output)
+
+st.download_button(
+    label="PDF 파일로 다운로드",
+    data=pdf_output.getvalue(),
+    file_name="retirement_savings_plan.pdf",
+    mime="application/pdf"
+)
